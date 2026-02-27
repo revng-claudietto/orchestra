@@ -211,6 +211,7 @@ def main():
         f.write("-gcodeview\n")
         f.write("-g\n")
         f.write("-fno-eliminate-unused-debug-types\n")
+        f.write("-fcase-insensitive-paths\n")
         f.write("-c\n")
         for d in include_dirs:
             f.write(f"-I{d}\n")
@@ -236,7 +237,7 @@ def main():
 
         # Rules
         w("rule cc\n")
-        w("  command = PDB_TRAVERSE_FILE=$traverse_file $clang @$compile_rsp -o $out $in\n")
+        w("  command = CLANG_DEBUG_INFO_ALLOWED_FILES=$allowed_files $clang @$compile_rsp -o $out $in\n")
         w("  description = CC $partition\n\n")
 
         # Link .obj into a dummy DLL just to produce the PDB.
@@ -255,28 +256,23 @@ def main():
             obj = os.path.join(obj_dir, f"{name}.obj")
             dll = os.path.join(obj_dir, f"{name}.dll")
             pdb = os.path.join(output_dir, f"{name}.pdb")
-            traverse_file = os.path.join(obj_dir, f"{name}.traverse")
-
-            # Write per-partition traverse whitelist
+            # Build colon-separated allowed files list
             settings_rsp = os.path.join(partitions_dir, name, "settings.rsp")
             partition_dir = os.path.join(partitions_dir, name)
-            traverse_paths = parse_rsp_traverse_files(
+            allowed_paths = parse_rsp_traverse_files(
                 settings_rsp, sdk_inc_root, partition_dir,
             )
-            with open(traverse_file, "w") as tf:
-                for p in traverse_paths:
-                    tf.write(p + "\n")
+            allowed_files_value = ":".join(allowed_paths)
 
             cpp_e = ninja_escape(cpp)
             obj_e = ninja_escape(obj)
             dll_e = ninja_escape(dll)
             pdb_e = ninja_escape(pdb)
-            traverse_e = ninja_escape(traverse_file)
 
             # compile main.cpp -> .obj
             w(f"build {obj_e}: cc {cpp_e}\n")
             w(f"  partition = {name}\n")
-            w(f"  traverse_file = {traverse_e}\n")
+            w(f"  allowed_files = {allowed_files_value}\n")
 
             # link .obj -> dummy .dll (+ .pdb as implicit output)
             w(f"build {dll_e} | {pdb_e}: link {obj_e}\n")
