@@ -15,6 +15,9 @@ configure: |
     "(@= repository_url @)" \
     "$BUILD_DIR/debootstrap"
 
+dependencies:
+  - zstd
+
 install: |
   cd "$BUILD_DIR/debootstrap"
 
