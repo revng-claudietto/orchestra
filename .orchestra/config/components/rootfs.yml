@@ -174,7 +174,9 @@ rootfs/(@= name @)/debug-info:
         mkdir -p "$BUILD_DIR"
 
       install: |
-        log() { echo "$@" >&2; }
+        function log() {
+          echo "$@" > /dev/stderr
+        }
 
         cd "$BUILD_DIR"
 
@@ -184,12 +186,13 @@ rootfs/(@= name @)/debug-info:
         mkdir -p "$XDG_CACHE_HOME"
 
         log "Fetching debug info for (@= name @)..."
-        find "$ROOTFS_DIR" -type f | while read ELF_FILE; do
+        # WIP head -n30 and || true
+        find "$ROOTFS_DIR" -type f | head -n30 | while read ELF_FILE; do
           if head -c 4 "$ELF_FILE" 2>/dev/null | grep -q $'\x7fELF'; then
             log "  $ELF_FILE"
             revng model fetch-debuginfo "$ELF_FILE" || true
           fi
-        done
+        done || true
 
         log "Debug info fetching complete."
 

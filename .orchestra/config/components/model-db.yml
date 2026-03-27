@@ -15,12 +15,14 @@ components:
           - revng
           #! WIP: only depending on a single rootfs/pdb for now
           - rootfs/ubuntu-24-04-x86-64/debug-info
-          - pdb/x86-64/debug-info
+          - pdb/x86-64
         configure: |
           mkdir -p "$BUILD_DIR"
 
         install: |
-          log() { echo "$@" >&2; }
+          function log() {
+            echo "$@" > /dev/stderr;
+          }
 
           cd "$BUILD_DIR"
 
@@ -31,141 +33,76 @@ components:
           rm -rf models/
           mkdir -p models
 
-          for ROOTFS_NAME in $(ls "$ROOTS_DIR"); do
-            ROOTFS_DIR="$ROOTS_DIR/$ROOTFS_NAME"
-
-            if ! test -d "$ROOTFS_DIR"; then
-              continue
-            fi
-
-            SYMBOLS_CACHE="$ROOTFS_DIR/symbols-cache"
+          log "Importing ELFs in roots"
+          for ROOTFS_DIR in $(find "$ROOTS_DIR" -mindepth 1 -maxdepth 1 -type d); do
+            ROOTFS_NAME="$(basename $ROOTFS_DIR)"
+            log "Importing from $ROOTFS_NAME"
 
             export XDG_CACHE_HOME="$BUILD_DIR/cache"
             mkdir -p "$XDG_CACHE_HOME"
 
+            log "Coping the symbols cache to the build directory"
+            SYMBOLS_CACHE="$ROOTFS_DIR/symbols-cache"
             if test -d "$SYMBOLS_CACHE"; then
               mkdir -p "$XDG_CACHE_HOME/revng/debug-symbols/elf"
-              cp -a "$SYMBOLS_CACHE"/* "$XDG_CACHE_HOME/revng/debug-symbols/elf/" \
-                2>/dev/null || true
+              cp -a "$SYMBOLS_CACHE"/* "$XDG_CACHE_HOME/revng/debug-symbols/elf/"
             fi
 
-            # WIP: limit to 5 ELFs per rootfs
+            # Find all ELFs
             ELF_COUNT=0
-            for ELF_FILE in $(find "$ROOTFS_DIR" -type f); do
+            for ELF_FILE in $(find "$ROOTFS_DIR" -not -path "$ROOTFS_DIR//symbols-cache/*" -type f); do
               if ! head -c 4 "$ELF_FILE" 2>/dev/null | grep -q $'\x7fELF'; then
                 continue
               fi
 
+              # WIP: limit to 5 ELFs per rootfs
               ELF_COUNT=$((ELF_COUNT + 1))
               if test "$ELF_COUNT" -gt 5; then
                 break
               fi
 
               RELATIVE_PATH="${ELF_FILE#$ROOTFS_DIR/}"
-              MODEL_NAME="$(echo "$RELATIVE_PATH" | tr '/' '_')"
+              MODEL_NAME="$(echo "$RELATIVE_PATH" | tr '/' '-')"
 
-              log "Importing $ROOTFS_NAME / $RELATIVE_PATH..."
+              log "Importing /$RELATIVE_PATH"
               revng \
                 analyze \
                 import-binary \
-                -o "$BUILD_DIR/models/${ROOTFS_NAME}_${MODEL_NAME}.yml" \
-                "$ELF_FILE" || true
+                "$ELF_FILE" \
+                -o "$BUILD_DIR/models/${ROOTFS_NAME}-${MODEL_NAME}.yml"
             done
           done
 
           PDB_DIR="$ORCHESTRA_ROOT/share/pdb"
-
           if test -d "$PDB_DIR"; then
-            for PDB_ARCH_DIR in "$PDB_DIR"/*/models; do
-              if ! test -d "$PDB_ARCH_DIR"; then
-                continue
-              fi
-
+            for PDB_ARCH_DIR in $(find "$PDB_DIR" -maxdepth 1 -mindepth 1 -type d); do
               PDB_ARCH_NAME="$(basename "$(dirname "$PDB_ARCH_DIR")")"
 
-              for MODEL_FILE in "$PDB_ARCH_DIR"/*.yml; do
-                if ! test -f "$MODEL_FILE"; then
-                  continue
-                fi
-
-                MODEL_NAME="$(basename "$MODEL_FILE" .yml)"
-                cp "$MODEL_FILE" "$BUILD_DIR/models/windows-${PDB_ARCH_NAME}_${MODEL_NAME}.yml"
+              # WIP: head 5
+              for PDB_FILE in $(find "$PDB_ARCH_DIR" -name "*.pdb"); do
+                PDB_NAME="$(basename "$PDB_FILE" .yml)"
+                log "Importing $PDB_FILE"
+                revng \
+                  model \
+                  import \
+                  debug-info \
+                  "$PDB_FILE" \
+                  -o "$BUILD_DIR/models/windows-${PDB_ARCH_NAME}-${PDB_NAME}.yml"
               done
             done
           fi
 
           rm -f db.sqlite
 
-          MODEL_FILES=$(find models/ -name '*.yml' -size +0c)
-          if test -n "$MODEL_FILES"; then
-            for ROOTFS_NAME in $(ls "$ROOTS_DIR"); do
-              ROOTFS_MODELS=$(find models/ -name "${ROOTFS_NAME}_*.yml" -size +0c)
-              if test -n "$ROOTFS_MODELS"; then
-                log "Exporting models for $ROOTFS_NAME to SQLite..."
-                revng \
-                  model \
-                  export \
-                  sqlite \
-                  --db db.sqlite \
-                  --platform "$ROOTFS_NAME" \
-                  $ROOTFS_MODELS
-              fi
-            done
+          log "Exporting models to SQLite..."
+          revng \
+            model \
+            export \
+            sqlite \
+            --db db.sqlite \
+            --platform "$ROOTFS_NAME" \
+            models/*.yml
 
-            for PDB_ARCH_DIR in "$PDB_DIR"/*/models; do
-              if ! test -d "$PDB_ARCH_DIR"; then
-                continue
-              fi
-
-              PDB_ARCH_NAME="$(basename "$(dirname "$PDB_ARCH_DIR")")"
-              PLATFORM_NAME="windows-${PDB_ARCH_NAME}"
-              PDB_MODELS=$(find models/ -name "${PLATFORM_NAME}_*.yml" -size +0c)
-              if test -n "$PDB_MODELS"; then
-                log "Exporting PDB models for $PLATFORM_NAME to SQLite..."
-                revng \
-                  model \
-                  export \
-                  sqlite \
-                  --db db.sqlite \
-                  --platform "$PLATFORM_NAME" \
-                  $PDB_MODELS
-              fi
-            done
-          fi
-
-          # Test: round-trip a few symbols through model-import-sqlite
-          if test -f db.sqlite; then
-            TEST_SYMBOLS=$(sqlite3 db.sqlite \
-              "SELECT s.Name FROM Symbol s LIMIT 3;")
-
-            if test -n "$TEST_SYMBOLS"; then
-              FIRST_LIBRARY=$(sqlite3 db.sqlite \
-                "SELECT l.Name FROM Library l LIMIT 1;")
-              FIRST_PLATFORM=$(sqlite3 db.sqlite \
-                "SELECT p.Name FROM Platform p LIMIT 1;")
-
-              SYMBOL_ARGS=""
-              for SYMBOL_NAME in $TEST_SYMBOLS; do
-                SYMBOL_ARGS="$SYMBOL_ARGS --symbol $SYMBOL_NAME"
-              done
-
-              log "Round-trip test: $TEST_SYMBOLS"
-              revng \
-                model \
-                import \
-                sqlite \
-                --db db.sqlite \
-                --platform "$FIRST_PLATFORM" \
-                --library "$FIRST_LIBRARY" \
-                $SYMBOL_ARGS \
-                -o test-round-trip.yml
-
-              log "Round-trip test passed ($(wc -l < test-round-trip.yml) lines)"
-              rm -f test-round-trip.yml
-            fi
-          fi
-
+          # WIP: rename db
           mkdir -p "${DESTDIR}${ORCHESTRA_ROOT}/share/revng"
-          if test -f db.sqlite; then
-            cp db.sqlite "${DESTDIR}${ORCHESTRA_ROOT}/share/revng/db.sqlite"
-          fi
+          cp db.sqlite "${DESTDIR}${ORCHESTRA_ROOT}/share/revng/db.sqlite"
