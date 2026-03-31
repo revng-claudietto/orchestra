@@ -62,6 +62,34 @@
 
 #@yaml/text-templated-strings
 ---
+#@ def container_configurations():
+- name: windows-x86-64
+  platform: windows
+  url: "docker://mcr.microsoft.com/windows/servercore@sha256:a4d6cb8427e90fd15e39bef29e0e800465989793d2a0826d3b7ceba78af0fe34"
+- name: windows-arm64
+  platform: windows
+  url: "docker://mcr.microsoft.com/windows/servercore@sha256:6e508f22063e2ab597c32909b66e3d4dff8914e385bd18410a4d7331d1b90dd4"
+#@ end
+
+#@yaml/text-templated-strings
+---
+#@ def wim_configurations():
+- name: windows-7-x86
+  url: "https://archive.org/download/Windows7-iso/Win7Pro32bit.iso"
+  hash: "bd4c03c917d00a40222d92a6fab04981a7bd46140bda1888eb961a322e3c5d89"
+  wim_path: "sources/install.wim"
+- name: windows-8-x86-64
+  url: "https://archive.org/download/windows-8-x-64/Windows%208%20x64.iso"
+  hash: "f475d6dfd7f234f6bccee4a0e5feee3ad9b166edfa53190564b31ac00aaeafa9"
+  wim_path: "sources/install.wim"
+- name: windows-8.1-x86-64
+  url: "https://archive.org/download/windows-8.1-x64-fully-updated/en_windows_8.1_x64.iso"
+  hash: "b977f90144f04679fa0d2eec80abf369554ab75980ac7db13da1cdc03accbb9d"
+  wim_path: "sources/install.esd"
+#@ end
+
+#@yaml/text-templated-strings
+---
 #@ def create_rootfs_component(name, codename, architecture, url, operating_system, packages):
 #@ if operating_system == "ubuntu":
 #@   components = "main,restricted,universe,multiverse"
@@ -162,6 +190,138 @@ rootfs/(@= name @):
         chmod -R u+rwX "${DESTDIR}${ORCHESTRA_ROOT}/share/roots/(@= name @)/"
 #@ end
 
+#@ def create_container_rootfs_component(name, platform, url):
+rootfs/(@= name @):
+  skip_post_install: true
+  builds:
+    default:
+      build_dependencies:
+        - skopeo
+        - umoci
+      configure: |
+        mkdir -p "$BUILD_DIR"
+
+      install: |
+        log() { echo "$@" >&2; }
+
+        cd "$BUILD_DIR"
+
+        rm -rf rootfs
+        rm -rf rootfs-oci
+
+        log "Fetching (@= name @)..."
+        skopeo \
+          --override-os "(@= platform @)" \
+          copy \
+          "(@= url @)" \
+          oci:rootfs-oci:latest
+
+        log "Unpacking (@= name @)..."
+        if ! umoci \
+             raw \
+             unpack \
+             --rootless \
+             --image rootfs-oci \
+             rootfs; then
+          rm -rf rootfs-oci
+          exit 1
+        fi
+
+        find rootfs -maxdepth 3 -type d -exec chmod 755 {} \;
+
+        rm -rf rootfs-oci
+
+        # Cleanup: keep only symlinks and PE/COFF files
+        log "Cleaning up non-PE/COFF files..."
+        find rootfs -not -type d | while read FILE; do
+          if test -L "$FILE"; then
+            continue
+          fi
+
+          if head -c 2 "$FILE" 2>/dev/null | grep -q 'MZ'; then
+            continue
+          fi
+
+          rm -f "$FILE"
+        done
+
+        # Fix permissions
+        chmod -R u+rwX rootfs/
+
+        # Drop empty directories
+        find rootfs -type d -empty -delete
+
+        log "Rootfs (@= name @) ready."
+
+        mkdir -p "${DESTDIR}${ORCHESTRA_ROOT}/share/roots/(@= name @)"
+        cp -a rootfs/* "${DESTDIR}${ORCHESTRA_ROOT}/share/roots/(@= name @)/"
+        chmod -R u+rwX "${DESTDIR}${ORCHESTRA_ROOT}/share/roots/(@= name @)/"
+#@ end
+
+#@ def create_wim_rootfs_component(name, url, hash, wim_path):
+rootfs/(@= name @):
+  skip_post_install: true
+  builds:
+    default:
+      configure: |
+        mkdir -p "$BUILD_DIR"
+
+      install: |
+        log() { echo "$@" >&2; }
+
+        cd "$BUILD_DIR"
+
+        rm -rf rootfs
+
+        log "Fetching (@= name @) ISO..."
+        fetch.sh \
+          --no-copy \
+          --hash 'sha256-(@= hash @)' \
+          '(@= url @)'
+
+        ISO_FILE="${SOURCE_ARCHIVES}/$(basename '(@= url @)')"
+
+        log "Extracting WIM from ISO..."
+        7z x -y "$ISO_FILE" "(@= wim_path @)"
+
+        log "Extracting rootfs from WIM..."
+        7z x -y "(@= wim_path @)" "1/*" -orootfs
+
+        rm -f "(@= wim_path @)"
+
+        # Flatten the image index prefix (1/) away
+        if test -d rootfs/1; then
+          mv rootfs/1/* rootfs/
+          rmdir rootfs/1
+        fi
+
+        # Cleanup: keep only symlinks and PE/COFF files
+        log "Cleaning up non-PE/COFF files..."
+        find rootfs -not -type d | while read FILE; do
+          if test -L "$FILE"; then
+            continue
+          fi
+
+          if head -c 2 "$FILE" 2>/dev/null | grep -q 'MZ'; then
+            continue
+          fi
+
+          rm -f "$FILE"
+        done
+
+        # Fix permissions
+        chmod -R u+rwX rootfs/
+
+        # Drop empty directories
+        find rootfs -type d -empty -delete
+
+        log "Rootfs (@= name @) ready."
+
+        mkdir -p "${DESTDIR}${ORCHESTRA_ROOT}/share/roots/(@= name @)"
+        cp -a rootfs/* "${DESTDIR}${ORCHESTRA_ROOT}/share/roots/(@= name @)/"
+        chmod -R u+rwX "${DESTDIR}${ORCHESTRA_ROOT}/share/roots/(@= name @)/"
+#@ end
+
 #@ def create_debug_info_component(name, codename=None, architecture=None, url=None, operating_system=None, packages=None):
 rootfs/(@= name @)/debug-info:
   skip_post_install: true
@@ -212,4 +372,10 @@ components:
   #@ for configuration in rootfs_configurations():
   _: #@ template.replace(create_rootfs_component(**configuration))
   _: #@ template.replace(create_debug_info_component(**configuration))
+  #@ end
+  #@ for configuration in container_configurations():
+  _: #@ template.replace(create_container_rootfs_component(**configuration))
+  #@ end
+  #@ for configuration in wim_configurations():
+  _: #@ template.replace(create_wim_rootfs_component(**configuration))
   #@ end
