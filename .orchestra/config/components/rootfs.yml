@@ -68,7 +68,7 @@
   url: "docker://mcr.microsoft.com/windows/servercore@sha256:a4d6cb8427e90fd15e39bef29e0e800465989793d2a0826d3b7ceba78af0fe34"
   keep_files:
   - "apisetschema.dll"
-- name: windows-arm64
+- name: windows-aarch64
   platform: windows
   url: "docker://mcr.microsoft.com/windows/servercore@sha256:6e508f22063e2ab597c32909b66e3d4dff8914e385bd18410a4d7331d1b90dd4"
   keep_files:

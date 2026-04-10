@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/nix/store/shzrdkj0qnsc2k3kccq2qs2y288x00sl-python3-3.11.14/bin/python3
 
 import json
 import os
