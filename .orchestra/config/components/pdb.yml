@@ -29,6 +29,7 @@ win32metadata/pdbs/(@= name @):
   builds:
     default:
       build_dependencies:
+        - llvm
         - clang-release
         - (@= vc_component @)
         - win32metadata
@@ -43,8 +44,8 @@ win32metadata/pdbs/(@= name @):
         log "Generating ninja build for (@= name @)"
         python3 "$ORCHESTRA_DOTDIR/support/compile-to-pdb.py" \
           --win32meta-root "$ORCHESTRA_ROOT/share/win32metadata" \
-          --clang "$ORCHESTRA_ROOT/bin/clang" \
-          --lld-link "$ORCHESTRA_ROOT/bin/lld-link" \
+          --clang "$ORCHESTRA_ROOT/lib/llvm/llvm/bin/clang" \
+          --lld-link "$ORCHESTRA_ROOT/lib/llvm/clang-release/bin/lld-link" \
           --vc19-include "$ORCHESTRA_ROOT/lib/vc/(@= vc_triple @)/VC/include" \
           --target-triple "(@= target_triple @)" \
           (@= arch_rsp_flags @) \
